@@ -9,6 +9,10 @@ import re
 import argparse
 import json
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from qbittorrent import Client
+import numpy as np
+from six.moves import cPickle as pickle
+from configuration import empty_search_try_limit
 
 #Utility Functions
 def lreplace(pattern, sub, string):
@@ -49,6 +53,29 @@ def listToLower(input_list):
             output_list.append(item)
     return output_list
 
+# Save
+def saveDictionaryToFile(dictionary, file_name):
+    file_name_numpy = file_name + ".npy"
+    np.save(file_name_numpy, dictionary) 
+
+# Load
+def loadDictionaryFromFile(file_name):
+    file_name_numpy = file_name + ".npy"
+    try:
+        read_dictionary = np.load(file_name_numpy,allow_pickle='TRUE').item()
+    except:
+        read_dictionary = {}
+    return read_dictionary
+
+def save_dict(di_, filename_):
+    with open(filename_, 'wb') as f:
+        pickle.dump(di_, f)
+
+def load_dict(filename_):
+    with open(filename_, 'rb') as f:
+        ret_di = pickle.load(f)
+    return ret_di
+
 #Stash GraphQL Class
 class stash_interface:
     performers = []
@@ -62,7 +89,13 @@ class stash_interface:
     auth_token = ""
     proxies = {}
     min_buildtime = datetime(2020, 6, 22) 
-    
+    qbit_username = ""
+    qbit_password = ""
+    qbit_ip = ""
+    qbit_category = ""
+    jacket_api_key = ""
+    jacket_api_url = ""
+
     headers = {
         "Accept-Encoding": "gzip, deflate, br",
         "Content-Type": "application/json",
@@ -71,13 +104,23 @@ class stash_interface:
         "DNT": "1"
         }
 
-    def __init__(self, server_url, user = "", pword = "", ignore_ssl = "", debug = False):
+    def __init__(self, server_url, user = "", pword = "", ignore_ssl = "", qbit_ip = "", qbit_username="", qbit_password = "", qbit_category="", jacket_api_key="", jacket_api_url="", downloads_wanted_tags="", downloads_remove_tags ="", performers_deep_download="", deep_download_limit=10, debug = False):
         self.server = server_url
         self.username = user
         self.password = pword
         self.ignore_ssl_warnings = ignore_ssl
         if ignore_ssl: requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
         self.debug_mode = debug
+        self.qbit_username = qbit_username
+        self.qbit_password = qbit_password
+        self.qbit_ip = qbit_ip
+        self.qbit_category = qbit_category
+        self.jacket_api_key = jacket_api_key
+        self.jacket_api_url = jacket_api_url
+        self.downloads_wanted_tags = [x.strip() for x in downloads_wanted_tags.split(",")]
+        self.downloads_remove_tags = [x.strip() for x in downloads_remove_tags.split(",")]
+        self.performers_deep_download = [x.strip() for x in performers_deep_download.split(",")]
+        self.deep_download_limit = deep_download_limit
         self.setAuth()
         self.checkVersion()
         self.populatePerformers()
@@ -168,14 +211,12 @@ class stash_interface:
         result = self.callGraphQL(query)
         return result["data"]["jobStatus"]
 
-    def scan(self, useFileMetadata = False, path=False): 
-        variables = {
-            'input': {
-                'useFileMetadata': useFileMetadata
-                }
-            }
-        if path:
-            variables['input']['paths'] = path
+    def scan(self, useFileMetadata = False): 
+        if useFileMetadata:
+            variables = {'input': {"useFileMetadata":True,"scanGeneratePreviews":False,"scanGenerateImagePreviews":False,"scanGenerateSprites":False}}
+            
+        else:
+            variables = {'input': {"useFileMetadata":False,"scanGeneratePreviews":False,"scanGenerateImagePreviews":False,"scanGenerateSprites":False}}
         query = """
         mutation metadataScan($input:ScanMetadataInput!) {
             metadataScan(input: $input)
@@ -201,6 +242,7 @@ class stash_interface:
                 'imagePreviews': False,
                 'markers': True,
                 'transcodes': False
+                #'thumbnails': False
                 }}
         
         query = """
@@ -209,6 +251,208 @@ class stash_interface:
             }
         """
         result = self.callGraphQL(query, variables)
+
+    def get_performers(self, performerInput=None):
+        if performerInput:
+            variables = performerInput
+        else:
+            variables = {
+                "filter": {
+                    "page": 1,
+                    "per_page": 120,
+                    "sort": "scenes_count",
+                    "direction": "ASC",
+                },
+                "performer_filter": {"filter_favorites": True},
+            }
+
+        query = """
+            query FindPerformers($filter: FindFilterType, $performer_filter: PerformerFilterType) {\n  findPerformers(filter: $filter, performer_filter: $performer_filter) {\n    count\n    performers {\n      ...PerformerData\n      __typename\n    }\n    __typename\n  }\n}\n\nfragment PerformerData on Performer {\n  id\n  checksum\n  name\n  url\n  gender\n  twitter\n  instagram\n  birthdate\n  ethnicity\n  country\n  eye_color\n  height\n  measurements\n  fake_tits\n  career_length\n  tattoos\n  piercings\n  aliases\n  favorite\n  image_path\n  scene_count\n  __typename\n}\n
+        """
+        result = self.callGraphQL(query, variables)
+        return result["data"]["findPerformers"]["performers"]
+
+    def qbit_api(self, username, password):
+        # qb = Client("localhost:9120")
+        qb = Client(self.qbit_ip)
+        qb.login(username, password)
+        return qb
+
+    def download(self, deep_search = False, performer_pair_mode = False, search_list = []):
+        try:
+            performers = self.get_performers()
+            keep_list, remove_list = self.get_keep_list(performers, deep_search=deep_search, search_list=search_list)
+            results = {}
+            if deep_search:
+                if (len(search_list) > 0):
+                    for search_term in search_list:
+                        if performer_pair_mode:
+                            new_results = self.get_search_results(keep_list, remove_list, search_term, search_list)
+                            self.download_to_torrent(new_results)
+                        else:
+                            new_results = self.get_search_results(keep_list, remove_list, search_term)
+                            self.download_to_torrent(new_results)
+                else:
+                    for search_term in keep_list:
+                        if performer_pair_mode:
+                            new_results = self.get_search_results(keep_list, remove_list, search_term, keep_list)
+                            self.download_to_torrent(new_results)
+                        else:
+                            new_results = self.get_search_results(keep_list, remove_list, search_term)
+                            self.download_to_torrent(new_results)
+            else:
+                results = self.get_search_results(keep_list, remove_list)
+                self.download_to_torrent(results)
+        except Exception as e:
+            print('Exception: ' + str(e))
+
+    def download_to_torrent(self, results):
+        api = self.qbit_api(self.qbit_username, self.qbit_password)
+        for result in results:
+            try:
+                print("Downloading: " + result)
+                api.download_from_link(results[result], category=self.qbit_catagory)
+            except Exception as e:
+                print(e)
+
+    def get_keep_list(self, performers, deep_search= False, search_list=[]):
+        try:
+            keep_list = []
+            remove_list = []
+
+            # always add tags to remove 
+            remove_list.extend(self.downloads_remove_tags)
+
+            if (len(search_list) > 0):
+                return search_list, remove_list
+
+            for performer in performers:
+                if deep_search:
+                    if int(performer["scene_count"]) < 10:
+                        keep_list.append(performer["name"])
+                        if performer['aliases'] is not None:
+                            aliases = performer['aliases'].split(',')
+                            for alias in aliases:
+                                if (len(alias.strip().split(" ")) > 1): # only add if more than one word
+                                    keep_list.append(alias.strip())
+                else:
+                    keep_list.append(performer["name"])
+                    if performer['aliases'] is not None:
+                        aliases = performer['aliases'].split(',')
+                        for alias in aliases:
+                            if (len(alias.strip().split(" ")) > 1): # only add if more than one word
+                                keep_list.append(alias.strip())
+
+            if deep_search:
+                return keep_list, remove_list
+
+            # Add tags to download
+            keep_list.extend(self.downloads_wanted_tags)
+
+            return keep_list, remove_list
+        except Exception as e:
+            print('Exception: ' + str(e))
+
+    def get_search_results(self, keep_list, remove_list, query=None, paired_performers = [], date=None):
+        search_string = "1080p "
+        if query is not None:
+            search_string = search_string + query + " "
+        if date is not None:
+            search_string = search_string + query + " "
+            y = str(date.year)[2:]
+            m = str(date.month)
+            if len(m) == 1:
+                m = "0" + m
+            d = str(date.day)
+            if len(d) == 1:
+                d = "0" + d
+            search_string = search_string + " " + y + " " + m + " " + d
+
+        results_to_keep = []
+        params = (
+            ("apikey", self.jacket_api_key),
+            ("Query", search_string),
+            ("Category[]", ["6000", "100004"]),
+            ("Tracker[]", "rarbg"),
+            ("_", "1599256674666"),
+        )
+
+        tries = 0
+        results = []
+        while tries < empty_search_try_limit and len(results) == 0:
+            jacket_url = "http://" + self.jacket_api_url + "/api/v2.0/indexers/all/results"
+            response = requests.get(
+                    jacket_url, params=params
+                )
+
+            response.raise_for_status()
+            # access JSOn content
+            jsonResponse = response.json()
+            results = jsonResponse["Results"]
+            tries = tries + 1
+            if tries == empty_search_try_limit:
+                print("max search tries hit for: " + search_string)
+
+        if len(paired_performers) > 0:
+            # Look for scenes with two matching performers within
+            for result in results:
+                    keep_this_result = False
+                    for performer in paired_performers:
+                        if performer != query:
+                            if result["Title"].lower().__contains__(performer.lower().replace(" ", ".")):
+                                keep_this_result = True
+                                print('Adding to DL list:   ' + result["Title"] + 'Because of keep keyword:   ' + performer)
+                            elif result["Title"].lower().__contains__(performer.lower()):
+                                keep_this_result = True
+                                print('Adding to DL list:   ' + result["Title"] + 'Because of keep keyword:   ' + performer)
+                    if keep_this_result:
+                        results_to_keep.append(result)
+        else:
+            for result in results:
+                keep_this_result = False
+                # print(result.filename)
+                for keep in keep_list:
+                    if result["Title"].lower().__contains__(keep.lower().replace(" ", ".")):
+                        keep_this_result = True
+                        print('Adding to DL list:   ' + result["Title"] + 'Because of keep keyword:   ' + keep)
+                    elif result["Title"].lower().__contains__(keep.lower()):
+                        keep_this_result = True
+                        print('Adding to DL list:   ' + result["Title"] + 'Because of keep keyword:   ' + keep)
+                if keep_this_result:
+                    results_to_keep.append(result)
+
+
+        final_keep_list = []
+
+        for result in results_to_keep:
+            # print(result.filename)
+            keep = True
+            for remove in remove_list:
+                if result["Title"].lower().__contains__(remove.lower().replace(" ", ".")):
+                    keep = False
+                    print('Removing from DL list:   ' + result["Title"] + 'Because of remove keyword:   ' + remove)
+                elif result["Title"].lower().__contains__(remove.lower()):
+                    keep = False
+                    print('Removing from DL list:   ' + result["Title"] + 'Because of remove keyword:   ' + remove)
+            if keep:
+                # Check if we already have this file
+                findScenes_params = {}
+                findScenes_params['filter'] = {'q':result['Title'][:-10], 'sort':"created_at", 'direction':'DESC'}
+                findScenes_params['scene_filter'] = {}
+                matching_scenes = self.findScenes(**findScenes_params)
+                if (len(matching_scenes) == 0):
+                    final_keep_list.append(result)
+
+        if query:
+            final_keep_list.sort(key=lambda x: x['Seeders'], reverse=True)
+            final_keep_list = final_keep_list[:self.deep_download_limit]
+
+        result_dict = {}
+        for result in final_keep_list:
+            result_dict[result["Title"]] = result["MagnetUri"]
+            # result_dict[result["MagnetUri"]] = result["Title"]
+
+        return result_dict
 
     def autoTag(self, autoTagInput= None):
         if autoTagInput:
@@ -366,7 +610,7 @@ class stash_interface:
             stashScenes = result["data"]["findScenes"]["scenes"]
             if not max_scenes: max_scenes = result["data"]["findScenes"]["count"]
             total_pages = math.ceil(max_scenes / variables['filter']['per_page'])
-            print("Getting Stash Scenes Page: "+str(variables['filter']['page'])+" of "+str(total_pages))
+            # print("Getting Stash Scenes Page: "+str(variables['filter']['page'])+" of "+str(total_pages))
             if (variables['filter']['page'] < total_pages and len(stashScenes)<max_scenes):  #If we're not at the last page or max_scenes, recurse with page +1 
                 variables['filter']['page'] = variables['filter']['page']+1
                 stashScenes = stashScenes+self.findScenes(**variables)
@@ -672,6 +916,16 @@ class config_class:
     password=""
     debug_mode = True
     ignore_ssl_warnings= True # Set to True if your Stash uses SSL w/ a self-signed cert
+    qbit_username = ""
+    qbit_password = ""
+    qbit_ip = ""
+    qbit_category=""
+    jacket_api_key="" 
+    jacket_api_url=""
+    downloads_wanted_tags=""
+    downloads_remove_tags=""
+    performers_deep_download=""
+    deep_download_limit=10
 
 
     def loadConfig(self):
@@ -732,11 +986,6 @@ def parseArgs(args):
                        '--scan',
                        action='store_true',
                        help='scan for new content')
-    my_parser.add_argument('-p',
-                       '--path',
-                       nargs='+',
-                       action='store',
-                       help='path for scans')
     my_parser.add_argument('-c',
                        '--clean',
                        action='store_true',
@@ -755,7 +1004,36 @@ def parseArgs(args):
                        const='pst',
                        action='store',
                        help='auto tag; pass nothing for performs, studios, and tags; pass \'p\' for performers, \'s\' for studios, \'t\' for tags, or any combination;  example: \'-at ps\' tags performers and studios')
-    
+    my_parser.add_argument(
+        "-d",
+        "--download",
+        action="store_true",
+        help="searches for new torrents matching favourited performers and adds them to qBittorrent",
+    )
+    my_parser.add_argument(
+        "-dd",
+        "--deepdownload",
+        action="store_true",
+        help="deep searchers torrents matching list of favourited performers and adds them to qBittorrent",
+    )
+    my_parser.add_argument(
+        "-pdd",
+        "--deepdownloadbyperformer",
+        action="store_true",
+        help="deep searchers torrents matching list of a list of performers and adds them to qBittorrent",
+    )
+    my_parser.add_argument(
+        "-pairpdd",
+        "--paireddeepdownloadbyperformer",
+        action="store_true",
+        help="deep searchers torrents matching list of a list of performers that are in scenes with other performers by a list and adds them to qBittorrent",
+    )
+    my_parser.add_argument(
+        "-pairdd",
+        "--paireddeepdownload",
+        action="store_true",
+        help="deep searchers torrents matching favourited performers that are in scenes with other favourited performers and adds them to qBittorrent",
+    )
     # Execute the parse_args() method to collect our args
     parsed_args = my_parser.parse_args(args)
     #Set variables accordingly
@@ -780,16 +1058,11 @@ def main(args):
         else:
             server = 'http://'+str(config.server_ip)+':'+str(config.server_port)
         
-        my_stash = stash_interface(server, config.username, config.password, config.ignore_ssl_warnings)
+        my_stash = stash_interface(server, config.username, config.password, config.ignore_ssl_warnings, config.qbit_ip, config.qbit_username, config.qbit_password, config.qbit_category, config.jacket_api_key,  config.jacket_api_url, config.downloads_wanted_tags, config.downloads_remove_tags, config.performers_deep_download, config.deep_download_limit)
         if args.scan: 
-            if args.path:
-                print("Scanning {}".format(','.join(args.path)))
-                my_stash.waitForIdle()
-                my_stash.scan(path=args.path)
-            else:
-                print("Scanning...")
-                my_stash.waitForIdle()
-                my_stash.scan()
+            print("Scanning...")
+            my_stash.waitForIdle()
+            my_stash.scan()
         if args.generate: 
             print("Generating...")
             my_stash.waitForIdle()
@@ -810,6 +1083,26 @@ def main(args):
             if 't' in args.auto_tag: variables["input"]['tags'] = ['*']
             my_stash.waitForIdle()
             my_stash.autoTag()
+        if args.download:
+            print("Downloading new torrents...")
+            my_stash.waitForIdle()
+            my_stash.download()
+        if args.deepdownload:
+            print("Downloading new torrents with deep search...")
+            my_stash.waitForIdle()
+            my_stash.download(True)
+        if args.deepdownloadbyperformer:
+            print("Downloading new torrents with deep search on list of performers...")
+            my_stash.waitForIdle()
+            my_stash.download(True, False, my_stash.performers_deep_download)
+        if args.paireddeepdownload:
+            print("Downloading new torrents that have favourited performers in scenes with other favourited performers...")
+            my_stash.waitForIdle()
+            my_stash.download(True, True)
+        if args.paireddeepdownloadbyperformer:
+            print("Downloading new torrents with deep search on list of performers that are in scenes together...")
+            my_stash.waitForIdle()
+            my_stash.download(True, True, my_stash.performers_deep_download)
         if args.wait:
             my_stash.waitForIdle()
         print("Success! Finished.")

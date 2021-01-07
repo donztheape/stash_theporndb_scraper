@@ -6,6 +6,21 @@ username="<USERNAME>" #Don't include the '<' or '>'
 password="<PASSWORD>" #Don't include the '<' or '>'
 ignore_ssl_warnings= True # Set to True if your Stash uses SSL w/ a self-signed cert
 
+qbit_username="" #Don't include the '<' or '>'
+qbit_password="" #Don't include the '<' or '>'
+qbit_ip= "http://localhost:6969/" # IP address of qbit web api
+qbit_category="x" # category for qbittorrent, (in qbittorent set where to download files)
+jacket_api_key="" # Jackett API key
+jacket_api_url="127.0.0.1:9117" # API IP and port for Jackett (searches for torrents)
+downloads_wanted_tags="oil, squirt" # tags to always add to the downloaded list. Downloads will get all of the favourites performers from stash plus search for these tags.
+downloads_remove_tags="lesbian, lesx" # tags to always remove. if a search result matches something here then it will be removed from the download list
+# performers_deep_download="Genevieve Sinn, Vanessa Sky, Sofie Reyez, Jesse Jane, Marsha May, assh lee, August Ames, Alexis Texas, Shyla Stylez, Kaisa Nord, Sophie Dee, Payton Preslee, Joslyn James, Kesha Ortega, Lana Rhoades, Monique Alexander, MJFresh, Lilly Hall, Mandy Muse, Osa Lovely, Gabriella Paltrova, Alexis Texas, Avery Black, Maya Bijou, Misha Cross, Janey Doe, Asa Akira,  Katya Rodriguez, Jessice Portman, Missy Martinez, Lisa Ann, Summer Brielle, Kiara Cole, Aliya Brynn, Valerie Steele, Dillion Harper, Savannah Sixx, Alexis Fawx, Brooklyn Gray, Kitty Carrera, Hime Marie, Liya Silver, Tiffany Watson, Cytherea, Aria Kai, Kendra Lust, Ariana Marie, Rose Monroe, Nicole Aniston, Joanna Angel, Savannah Bond, Jessa Rhodes, Ashley Adams, Ivy Lebelle, Skylar Vox, August Taylor, Lily Lane, Veronica Avluv, Bardot, Jillian Janson, Riley Reid, Kissa Sins, Madison Ivy, Diamond Jackson, Brandi Love, Bonnie Rotten, Katrina Jade, Honey Gold, Teanna Trump, Natalie Knight, Jessie Saint, Luna Star, Gabbie Carter, Jane Wilde, Angela White, Leigh Raven, Naomi Swann, Carmen Caliente, Nia Nacci, Janice Griffith, Kimmy Granger, Holly Hendrix, Eliza Ibarra, Mia Malkova, Chloe Couture" 
+performers_deep_download="Bonnie Rotten, kira noir, Demi Sutra,Veronica Avluv, angela white, Lena Paul, Kenzie Reeves, Payton Preslee, Lilly Ford, Lilly Lit, Lily Lit, Lily Ford, Adira Allure, Kimmy Granger, Jill Kassidy, Chloe Cherry, Luna Star, Janice Griffith, Holly Hendrix, Scarlit Scandal, Leigh Raven"
+# performers_deep_download="Karmen Karma"
+# performers to download if -PDD parameter used
+deep_download_limit=10
+empty_search_try_limit=10
+
 # Configuration options
 scrape_tag= "Scraped From ThePornDB"  #Tag to be added to scraped scenes.  Set to None (without quotes) to disable
 unmatched_tag = "Missing From ThePornDB" #Tag to be added to scenes that aren't matched at TPDB.  Set to None (without quotes)  to disable.
